@@ -11,7 +11,7 @@ use graphviz_rust::printer::PrinterContext;
 
 fn build_dot(nodes: &Vec<Rc<Value>>, edges: &Vec<(Rc<Value>, Rc<Value>)>) -> Graph {
     let mut stmts = vec![];
-    let mut node_ids = HashMap::new();
+    let mut node_ids: HashMap<*const Value, usize> = HashMap::new();
 
     stmts.push(Stmt::Attribute(Attribute(
         Id::Plain("rankdir".to_string()),
@@ -39,14 +39,14 @@ fn build_dot(nodes: &Vec<Rc<Value>>, edges: &Vec<(Rc<Value>, Rc<Value>)>) -> Gra
 
             let edge_stmt = Stmt::Edge(Edge {
                 ty: EdgeTy::Pair(
-                    Vertex::N(NodeId(Id::Plain(op_node_id.clone()), None)),
+                    Vertex::N(NodeId(Id::Plain(op_node_id), None)),
                     Vertex::N(NodeId(Id::Plain(i.to_string()), None)),
                 ),
                 attributes: vec![],
             });
             stmts.push(edge_stmt);
         }
-        node_ids.insert(node.clone(), i);
+        node_ids.insert(Rc::as_ptr(node), i);
         let lbl = format!(
             "\"val {:.2}\\lgrad: {:.2}{}\"",
             node.number,
@@ -69,8 +69,16 @@ fn build_dot(nodes: &Vec<Rc<Value>>, edges: &Vec<(Rc<Value>, Rc<Value>)>) -> Gra
     }
 
     for (src, dst) in edges {
-        let src_id = node_ids.get(src).unwrap();
-        let dst_id = node_ids.get(dst).unwrap();
+        for (src, dst) in edges {
+            if !node_ids.contains_key(&Rc::as_ptr(src)) {
+                eprintln!("Missing src: {:?}", Rc::as_ptr(src));
+            }
+            if !node_ids.contains_key(&Rc::as_ptr(dst)) {
+                eprintln!("Missing dst: {:?}", Rc::as_ptr(dst));
+            }
+        }
+        let src_id = node_ids.get(&Rc::as_ptr(src)).unwrap();
+        let dst_id = node_ids.get(&Rc::as_ptr(dst)).unwrap();
 
         if dst.operation.is_some() {
             let op_node_id = format!("op_{}", dst_id);
@@ -104,12 +112,12 @@ fn build_graph(
     nodes: &mut Vec<Rc<Value>>,
     edges: &mut Vec<(Rc<Value>, Rc<Value>)>,
 ) {
-    if !nodes.contains(&value) {
+    if !nodes.iter().any(|n| Rc::ptr_eq(n, &value)) {
         nodes.push(value.clone());
     }
 
     for child in &value.children {
-        if !nodes.contains(child) {
+        if !nodes.iter().any(|n| Rc::ptr_eq(n, child)) {
             nodes.push(child.clone());
         }
 
@@ -134,7 +142,8 @@ mod tests {
 
     #[test]
     fn test_display_graph() {
-        let value = Value::new(5.0) * Value::new(10.0) + Value::new(3.0) / Value::new(8.0);
+        let value = (Value::new(5.0) + Value::new(5.0)) * Value::new(10.0)
+            + Value::new(3.0) / (Value::new(8.0) + Value::new(10.0));
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
         build_graph(value.into(), &mut nodes, &mut edges);
@@ -155,7 +164,8 @@ mod tests {
 
     #[test]
     fn test_build_graph() {
-        let value = Value::new(5.0) * Value::new(10.0) + Value::new(3.0) / Value::new(8.0);
+        let value = (Value::new(5.0) + Value::new(5.0)) * Value::new(10.0)
+            + Value::new(3.0) / (Value::new(8.0) + Value::new(10.0));
 
         println!("{:?}\n\n", value);
         let mut nodes = Vec::new();
