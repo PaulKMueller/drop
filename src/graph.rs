@@ -13,9 +13,40 @@ fn build_dot(nodes: &Vec<Rc<Value>>, edges: &Vec<(Rc<Value>, Rc<Value>)>) -> Gra
     let mut stmts = vec![];
     let mut node_ids = HashMap::new();
 
-    // Assign each node a unique ID based on its index
+    stmts.push(Stmt::Attribute(Attribute(
+        Id::Plain("rankdir".to_string()),
+        Id::Plain("LR".to_string()),
+    )));
+
     for (i, node) in nodes.iter().enumerate() {
-        node_ids.insert(node.clone(), i); // assuming Value: Eq + Hash
+        if let Some(op) = node.operation {
+            let op_node_id = format!("op_{}", i);
+
+            // Add the op node
+            stmts.push(Stmt::Node(Node {
+                id: NodeId(Id::Plain(op_node_id.clone()), None),
+                attributes: vec![
+                    Attribute(
+                        Id::Plain("label".to_string()),
+                        Id::Plain(format!("\"{}\"", op)),
+                    ),
+                    Attribute(
+                        Id::Plain("shape".to_string()),
+                        Id::Plain("circle".to_string()),
+                    ),
+                ],
+            }));
+
+            let edge_stmt = Stmt::Edge(Edge {
+                ty: EdgeTy::Pair(
+                    Vertex::N(NodeId(Id::Plain(op_node_id.clone()), None)),
+                    Vertex::N(NodeId(Id::Plain(i.to_string()), None)),
+                ),
+                attributes: vec![],
+            });
+            stmts.push(edge_stmt);
+        }
+        node_ids.insert(node.clone(), i);
         let lbl = format!(
             "\"val {:.2}\\lgrad: {:.2}{}\"",
             node.number,
@@ -41,16 +72,27 @@ fn build_dot(nodes: &Vec<Rc<Value>>, edges: &Vec<(Rc<Value>, Rc<Value>)>) -> Gra
         let src_id = node_ids.get(src).unwrap();
         let dst_id = node_ids.get(dst).unwrap();
 
-        stmts.push(Stmt::Edge(Edge {
-            ty: EdgeTy::Pair(
-                Vertex::N(NodeId(Id::Plain(src_id.to_string()), None)),
-                Vertex::N(NodeId(Id::Plain(dst_id.to_string()), None)),
-            ),
-            attributes: vec![],
-        }));
+        if dst.operation.is_some() {
+            let op_node_id = format!("op_{}", dst_id);
+            stmts.push(Stmt::Edge(Edge {
+                ty: EdgeTy::Pair(
+                    Vertex::N(NodeId(Id::Plain(src_id.to_string()), None)),
+                    Vertex::N(NodeId(Id::Plain(op_node_id), None)),
+                ),
+                attributes: vec![],
+            }));
+        } else {
+            stmts.push(Stmt::Edge(Edge {
+                ty: EdgeTy::Pair(
+                    Vertex::N(NodeId(Id::Plain(src_id.to_string()), None)),
+                    Vertex::N(NodeId(Id::Plain(dst_id.to_string()), None)),
+                ),
+                attributes: vec![],
+            }));
+        }
     }
 
-    Graph::Graph {
+    Graph::DiGraph {
         strict: false,
         id: Id::Plain("G".to_string()),
         stmts,
