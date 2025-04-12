@@ -48,9 +48,9 @@ fn build_dot(nodes: &Vec<Rc<Value>>, edges: &Vec<(Rc<Value>, Rc<Value>)>) -> Gra
         }
         node_ids.insert(Rc::as_ptr(node), i);
         let lbl = format!(
-            "\"val {:.2}\\lgrad: {:.2}{}\"",
+            "\"val {:.4}\\lgrad: {:.4}{}\"",
             node.number,
-            node.gradient,
+            node.gradient.take(),
             node.operation
                 .map(|op| format!("\\lop: {}", op))
                 .unwrap_or_default()
@@ -116,7 +116,7 @@ fn build_graph(
         nodes.push(value.clone());
     }
 
-    for child in &value.children {
+    for child in &value.children.take() {
         if !nodes.iter().any(|n| Rc::ptr_eq(n, child)) {
             nodes.push(child.clone());
         }
@@ -138,18 +138,60 @@ mod tests {
 
     use std::{fs::File, io::Write};
 
+    use crate::value::V;
+
     use super::*;
 
     #[test]
     fn test_display_graph() {
-        let value = (Value::new(5.0) + Value::new(5.0)) * Value::new(10.0)
-            + Value::new(3.0) / (Value::new(8.0) + Value::new(10.0));
+        let a = V::new(5.0);
+        let b = V::new(5.0);
+        let c = V::new(10.0);
+        let d = V::new(3.0);
+        let e = V::new(8.0);
+        let f = V::new(10.0);
+        
+        let ab = &a + &b;
+        let ef = &e + &f;
+        let left = &ab * &c;
+        let right = &d / &ef;
+        let result = &left + &right;
+        
+        result.backpropagate();
+        
+        println!("a ptr = {:p}", &*a.0);
+        println!("b ptr = {:p}", &*b.0);
+        println!("c ptr = {:p}", &*c.0);
+        println!("d ptr = {:p}", &*d.0);
+        println!("e ptr = {:p}", &*e.0);
+        println!("f ptr = {:p}", &*f.0);
+        
+        println!("∂L/∂a = {}", a.grad());
+        println!("∂L/∂b = {}", b.grad());
+        println!("∂L/∂c = {}", c.grad());
+        println!("∂L/∂d = {}", d.grad());
+        println!("∂L/∂e = {}", e.grad());
+        println!("∂L/∂f = {}", f.grad());
+
+        println!("a = {:p}", &*a.0);
+        println!("b = {:p}", &*b.0);
+
+        for child in result.0.children.borrow().iter() {
+            println!("child: {:?}", child.number);
+            for grand in child.children.borrow().iter() {
+                println!("  grandchild: {:?}", grand.number);
+            }
+        }
+
+        // let mut value = Value::new(11.0) / Value::new(23.00);
+        // println!("{:?}", value.gradient);
+
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
-        build_graph(value.into(), &mut nodes, &mut edges);
+        build_graph(result.0.clone(), &mut nodes, &mut edges);
 
         let dot_graph = build_dot(&nodes, &edges);
-        println!("{:?}", dot_graph);
+        // println!("{:?}", dot_graph);
 
         let svg = exec(
             dot_graph,
@@ -162,17 +204,17 @@ mod tests {
             .expect("Unable to write SVG content");
     }
 
-    #[test]
-    fn test_build_graph() {
-        let value = (Value::new(5.0) + Value::new(5.0)) * Value::new(10.0)
-            + Value::new(3.0) / (Value::new(8.0) + Value::new(10.0));
+    // #[test]
+    // fn test_build_graph() {
+    //     let value = (Value::new(5.0) + Value::new(5.0)) * Value::new(10.0)
+    //         + Value::new(3.0) / (Value::new(8.0) + Value::new(10.0));
 
-        println!("{:?}\n\n", value);
-        let mut nodes = Vec::new();
-        let mut edges = Vec::new();
-        build_graph(Rc::new(value), &mut nodes, &mut edges);
-        println!("Here is the graph that was built:\n");
-        println!("Nodes:\n{:?}", nodes);
-        println!("Edges:\n{:?}", edges);
-    }
+    //     println!("{:?}\n\n", value);
+    //     let mut nodes = Vec::new();
+    //     let mut edges = Vec::new();
+    //     build_graph(Rc::new(value), &mut nodes, &mut edges);
+    //     println!("Here is the graph that was built:\n");
+    //     println!("Nodes:\n{:?}", nodes);
+    //     println!("Edges:\n{:?}", edges);
+    // }
 }

@@ -1,19 +1,18 @@
+use std::cell::RefCell;
 use std::clone;
+use std::collections::HashSet;
 use std::fmt;
 use std::ops::{Add, Div, Mul, Sub};
 use std::rc::Rc;
 
-// TODO: Add gradient variable
-// TODO: Build Graphviz visualization including gradient and Value labels
-
 use ordered_float::OrderedFloat;
 
-#[derive(Eq, Hash, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct Value {
     pub number: OrderedFloat<f32>,
-    pub gradient: OrderedFloat<f32>,
+    pub gradient: RefCell<OrderedFloat<f32>>,
     pub operation: Option<char>,
-    pub children: Vec<Rc<Value>>,
+    pub children: RefCell<Vec<Rc<Value>>>,
 }
 
 impl Value {
@@ -21,9 +20,9 @@ impl Value {
         let number = OrderedFloat::from(number);
         Value {
             number,
-            children: vec![],
+            children: RefCell::from(vec![]),
             operation: None,
-            gradient: OrderedFloat::from(0.0),
+            gradient: RefCell::from(OrderedFloat::from(0.0)),
         }
     }
 
@@ -33,9 +32,10 @@ impl Value {
         operation: Option<char>,
         gradient: f32,
     ) -> Self {
-
         let number = OrderedFloat::from(number);
         let gradient = OrderedFloat::from(gradient);
+        let children = RefCell::from(children);
+        let gradient = RefCell::from(gradient);
         Value {
             number,
             children,
@@ -44,12 +44,84 @@ impl Value {
         }
     }
 
-    // pub fn backward(&mut self) {
-    //     self.gradient = 1;
-    //     for child in self.children.as_slice() {
-    //         child.backward();
-    //     }
-    // }
+    pub fn backpropagate(self: &Rc<Self>) {
+        *self.gradient.borrow_mut() = OrderedFloat(1.0);
+
+        let mut visited = HashSet::new();
+        self._backward_recursive(&mut visited);
+    }
+
+    fn _backward_recursive(self: &Rc<Self>, visited: &mut HashSet<*const Value>) {
+        let ptr = Rc::as_ptr(self);
+        if visited.contains(&ptr) {
+            return;
+        }
+
+        visited.insert(ptr);
+
+        self.backward();
+        let children = self.children.borrow();
+        for child in children.iter() {
+            child._backward_recursive(visited);
+        }
+    }
+
+    pub fn backward(&self) {
+        println!(
+            "→ BACKWARD on ptr {:p} val={} grad={:?}",
+            self,
+            self.number,
+            self.gradient.borrow()
+        );
+        match self.operation {
+            Some('+') => {
+                let grad = *self.gradient.borrow();
+                let children = self.children.borrow();
+                for child in children.iter() {
+                    *child.gradient.borrow_mut() += grad;
+                }
+            }
+            Some('-') => {
+                let grad = *self.gradient.borrow();
+                let children = self.children.borrow();
+                assert_eq!(children.len(), 2, "Subtraction expects two children");
+    
+                let left = &children[0];
+                let right = &children[1];
+    
+                *left.gradient.borrow_mut() += grad;
+                *right.gradient.borrow_mut() += -grad;
+            }
+            Some('*') => {
+                let grad = *self.gradient.borrow();
+                let children = self.children.borrow();
+                assert_eq!(children.len(), 2, "Multiplication expects two children");
+    
+                let left = &children[0];
+                let right = &children[1];
+    
+                *left.gradient.borrow_mut() += grad * right.number;
+                *right.gradient.borrow_mut() += grad * left.number;
+            }
+            Some('/') => {
+                let grad = *self.gradient.borrow();
+                let children = self.children.borrow();
+                assert_eq!(children.len(), 2, "Division expects two children");
+    
+                let left = &children[0];
+                let right = &children[1];
+    
+                *left.gradient.borrow_mut() += grad / right.number;
+                *right.gradient.borrow_mut() += -grad * left.number / (right.number * right.number);
+            }
+            None => {
+                println!("Reached input node: val = {}", self.number);
+            }
+            Some(op) => {
+                println!("Operator '{}' not supported.", op);
+            }
+        }
+    }
 
     pub fn get(&self) -> OrderedFloat<f32> {
         self.number
@@ -62,7 +134,7 @@ impl clone::Clone for Value {
             number: self.number,
             children: self.children.clone(),
             operation: self.operation,
-            gradient: self.gradient,
+            gradient: self.gradient.clone(),
         }
     }
 }
@@ -73,80 +145,103 @@ impl fmt::Debug for Value {
     }
 }
 
-// impl cmp::PartialEq for Value {
-//     fn eq(&self, other: &Self) -> bool {
-//         self.number == other.number
-//     }
-// }
+#[derive(Clone)]
+pub struct V(pub Rc<Value>);
 
-impl Mul for Value {
-    type Output = Value;
+impl Add<&V> for &V {
+    type Output = V;
 
-    fn mul(self, other: Value) -> Value {
-        Value {
-            number: self.number * other.number,
-            children: vec![self.into(), other.into()],
-            operation: Some('*'),
-            gradient: OrderedFloat::from(0.0),
-        }
-    }
-}
-
-impl Div for Value {
-    type Output = Value;
-
-    fn div(self, other: Value) -> Value {
-        Value {
-            number: self.number / other.number,
-            children: vec![self.into(), other.into()],
-            operation: Some('/'),
-            gradient: OrderedFloat::from(0.0),
-        }
-    }
-}
-
-impl Add for Value {
-    type Output = Value;
-
-    fn add(self, other: Value) -> Value {
-        Value {
-            number: self.number + other.number,
-            children: vec![self.into(), other.into()],
+    fn add(self, other: &V) -> V {
+        let result = Value {
+            number: self.0.number + other.0.number,
+            gradient: RefCell::new(OrderedFloat(0.0)),
             operation: Some('+'),
-            gradient: OrderedFloat::from(0.0),
-        }
+            children: RefCell::new(vec![self.0.clone(), other.0.clone()]),
+        };
+        V(Rc::new(result))
     }
 }
 
-impl Sub for Value {
-    type Output = Value;
+impl Sub<&V> for &V {
+    type Output = V;
 
-    fn sub(self, other: Value) -> Value {
-        Value {
-            number: self.number - other.number,
-            children: vec![self.into(), other.into()],
+    fn sub(self, other: &V) -> V {
+        let result = Value {
+            number: self.0.number - other.0.number,
+            gradient: RefCell::new(OrderedFloat(0.0)),
             operation: Some('-'),
-            gradient: OrderedFloat::from(0.0),
-        }
+            children: RefCell::new(vec![self.0.clone(), other.0.clone()]),
+        };
+        V(Rc::new(result))
     }
 }
 
-#[cfg(test)]
-#[test]
-fn test_operators() {
-    // let c = Value::new(5.0) + Value::new(4.0);
-    // assert_eq!(c, Value::new_manual(9.0, vec![], Some('+'), 0.0));
+impl Div<&V> for &V {
+    type Output = V;
 
-    // let c = Value::new(5.0) - Value::new(4.0);
-    // assert_eq!(c, Value::new_manual(1.0, vec![], Some('-'), 0.0));
+    fn div(self, other: &V) -> V {
+        let result = Value {
+            number: self.0.number / other.0.number,
+            gradient: RefCell::new(OrderedFloat(0.0)),
+            operation: Some('/'),
+            children: RefCell::new(vec![self.0.clone(), other.0.clone()]),
+        };
+        V(Rc::new(result))
+    }
+}
 
-    // let c = Value::new(8.0) / Value::new(4.0);
-    // assert_eq!(c, Value::new_manual(2.0, vec![], Some('*'), 0.0));
+impl Mul<&V> for &V {
+    type Output = V;
 
-    // let c = Value::new(2.0) * Value::new(4.0);
-    // assert_eq!(c, Value::new_manual(8.0, vec![], Some('/'), 0.0));
+    fn mul(self, other: &V) -> V {
+        let result = Value {
+            number: self.0.number * other.0.number,
+            gradient: RefCell::new(OrderedFloat(0.0)),
+            operation: Some('*'),
+            children: RefCell::new(vec![self.0.clone(), other.0.clone()]),
+        };
+        V(Rc::new(result))
+    }
+}
 
-    // let c = Value::new(2.0) + Value::new(3.0) * Value::new(4.0);
-    // println!("{:?}", c);
-    // assert_eq!(c, Value::new_manual(14.0, vec![], Some('+'), 0.0));
+impl Add for V {
+    type Output = V;
+    fn add(self, other: V) -> V {
+        &self + &other
+    }
+}
+
+impl Sub for V {
+    type Output = V;
+    fn sub(self, other: V) -> V {
+        &self + &other
+    }
+}
+
+impl Mul for V {
+    type Output = V;
+    fn mul(self, other: V) -> V {
+        &self * &other
+    }
+}
+
+impl Div for V {
+    type Output = V;
+    fn div(self, other: V) -> V {
+        &self / &other
+    }
+}
+
+impl V {
+    pub fn new(n: f32) -> V {
+        V(Rc::new(Value::new(n)))
+    }
+
+    pub fn backpropagate(&self) {
+        self.0.backpropagate();
+    }
+
+    pub fn grad(&self) -> f32 {
+        self.0.gradient.borrow().0
+    }
 }
